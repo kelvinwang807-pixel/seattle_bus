@@ -227,6 +227,64 @@ def predict_future_delay(
     return float(predict(model, x, checkpoint).item())
 
 
+def build_prediction_window_from_history(history: pd.DataFrame, checkpoint: dict[str, Any]) -> torch.Tensor:
+    window = int(checkpoint.get("window", DEFAULT_WINDOW))
+    while len(history) < window:
+        history = pd.concat([history.head(1), history], ignore_index=True)
+
+    values = history.tail(window)[process.FEATURE_COLUMNS].to_numpy(dtype="float32")
+    return torch.tensor(values, dtype=torch.float32).unsqueeze(0)
+
+
+def predict_future_delay_range(
+    route_id: str,
+    current_stop_sequence: int,
+    end_stop_sequence: int,
+    current_delay: float,
+    model_path: str | Path = MODEL_PATH,
+    data_dir: str | Path = "data",
+    direction_id: int | None = None,
+) -> dict[int, float]:
+    if end_stop_sequence <= current_stop_sequence:
+        raise ValueError("end_stop_sequence must be greater than current_stop_sequence")
+
+    model, checkpoint = load_or_train(model_path=model_path, data_dir=data_dir)
+    route_to_idx = {str(k): int(v) for k, v in checkpoint.get("route_to_idx", {}).items()}
+    route_rows = _representative_route_rows(
+        route_id=route_id,
+        stop_sequence=current_stop_sequence,
+        route_to_idx=route_to_idx,
+        data_dir=data_dir,
+        direction_id=direction_id,
+    )
+
+    history = route_rows[route_rows["stop_sequence"] <= int(current_stop_sequence)].copy()
+    if history.empty:
+        raise ValueError(f"No stop_sequence {current_stop_sequence} found for route_id {route_id!r}.")
+
+    if "delay" not in history.columns:
+        history["delay"] = float(current_delay)
+    else:
+        history["delay"] = pd.to_numeric(history["delay"], errors="coerce").fillna(float(current_delay))
+    history.loc[history.index[-1], "delay"] = float(current_delay)
+    predictions: dict[int, float] = {}
+
+    for next_stop in range(current_stop_sequence + 1, end_stop_sequence + 1):
+        stop_rows = route_rows[route_rows["stop_sequence"] == next_stop]
+        if stop_rows.empty:
+            raise ValueError(f"No stop_sequence {next_stop} found for route_id {route_id!r}.")
+
+        x = build_prediction_window_from_history(history, checkpoint)
+        predicted_delay = float(predict(model, x, checkpoint).item())
+        predictions[next_stop] = predicted_delay
+
+        next_row = stop_rows.iloc[[0]].copy()
+        next_row["delay"] = predicted_delay
+        history = pd.concat([history, next_row], ignore_index=True)
+
+    return predictions
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train or run the Seattle bus delay LSTM model.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -242,6 +300,7 @@ def _parse_args() -> argparse.Namespace:
     predict_parser = subparsers.add_parser("predict", help="Predict delay at a future stop.")
     predict_parser.add_argument("--route-id", required=True)
     predict_parser.add_argument("--stop-sequence", type=int, required=True)
+    predict_parser.add_argument("--end-stop-sequence", type=int)
     predict_parser.add_argument("--current-delay", type=float, required=True, help="Current delay in seconds.")
     predict_parser.add_argument("--direction-id", type=int, choices=[0, 1])
     predict_parser.add_argument("--data-dir", default="data")
@@ -264,15 +323,28 @@ def main() -> None:
         final_mae = checkpoint["losses"][-1] if checkpoint["losses"] else float("nan")
         print(f"Saved {args.model_path}. Final training MAE: {final_mae:.2f} seconds")
     elif args.command == "predict":
-        delay = predict_future_delay(
-            route_id=args.route_id,
-            stop_sequence=args.stop_sequence,
-            current_delay=args.current_delay,
-            model_path=args.model_path,
-            data_dir=args.data_dir,
-            direction_id=args.direction_id,
-        )
-        print(f"Predicted delay at stop_sequence {args.stop_sequence}: {delay:.2f} seconds")
+        if args.end_stop_sequence is not None:
+            predictions = predict_future_delay_range(
+                route_id=args.route_id,
+                current_stop_sequence=args.stop_sequence,
+                end_stop_sequence=args.end_stop_sequence,
+                current_delay=args.current_delay,
+                model_path=args.model_path,
+                data_dir=args.data_dir,
+                direction_id=args.direction_id,
+            )
+            for stop_sequence, delay in predictions.items():
+                print(f"Predicted delay at stop_sequence {stop_sequence}: {delay:.2f} seconds")
+        else:
+            delay = predict_future_delay(
+                route_id=args.route_id,
+                stop_sequence=args.stop_sequence,
+                current_delay=args.current_delay,
+                model_path=args.model_path,
+                data_dir=args.data_dir,
+                direction_id=args.direction_id,
+            )
+            print(f"Predicted delay at stop_sequence {args.stop_sequence}: {delay:.2f} seconds")
 
 
 if __name__ == "__main__":

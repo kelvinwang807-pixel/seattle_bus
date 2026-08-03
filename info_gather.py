@@ -112,14 +112,16 @@ def main() -> None:
         return
 
     route_id = _prompt_text("Route ID")
-    stop_sequence = _prompt_int("Future stop sequence")
+    current_stop_sequence = _prompt_int("Current stop sequence")
+    end_stop_sequence = _prompt_int("End stop sequence")
     current_delay = _prompt_float("Current delay in seconds")
     direction_id = _prompt_optional_direction()
 
     try:
-        predicted_delay = training.predict_future_delay(
+        predictions = training.predict_future_delay_range(
             route_id=route_id,
-            stop_sequence=stop_sequence,
+            current_stop_sequence=current_stop_sequence,
+            end_stop_sequence=end_stop_sequence,
             current_delay=current_delay,
             model_path=model_path,
             data_dir=data_dir,
@@ -129,7 +131,8 @@ def main() -> None:
         print(f"Could not predict delay: {exc}")
         return
 
-    print(f"Predicted delay at stop sequence {stop_sequence}: {predicted_delay:.2f} seconds")
+    for stop_sequence, predicted_delay in predictions.items():
+        print(f"Predicted delay at stop_sequence {stop_sequence}: {predicted_delay:.2f} seconds")
 
 
 if __name__ == "__main__":
