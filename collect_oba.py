@@ -1,3 +1,5 @@
+"""Continuously collect King County Metro vehicle snapshots from OneBusAway."""
+
 import json
 import os
 import time
@@ -27,12 +29,29 @@ def save_snapshot(payload: dict) -> Path:
 
     filename = f"vehicles-{collected_at.strftime('%Y%m%dT%H%M%SZ')}.json"
     path = day_directory / filename
-    for vehicle in payload.get("data", {}).get("list", []):
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("OneBusAway response is missing the data object")
+
+    available_vehicles = []
+    for vehicle in data.get("list") or []:
+        if not isinstance(vehicle, dict):
+            continue
+
+        # OneBusAway explicitly returns tripStatus=null for vehicles that are
+        # known to the system but are not currently assigned to an active trip.
         status = vehicle.get("tripStatus")
+        if not isinstance(status, dict):
+            status = {}
+
         trip_id = vehicle.get("tripId") or status.get("activeTripId")
         vehicle_id = vehicle.get("vehicleId") or status.get("vehicleId")
-        if not trip_id or not vehicle_id:
-            payload.get("data", {}).get("list", []).remove(vehicle)
+        if trip_id and vehicle_id:
+            available_vehicles.append(vehicle)
+
+    # Replace the list after iteration. Removing items from the list while
+    # iterating over it would skip some adjacent unavailable vehicles.
+    data["list"] = available_vehicles
     snapshot = {
         "collected_at": collected_at.isoformat(),
         "source": "onebusaway vehicles-for-agency",

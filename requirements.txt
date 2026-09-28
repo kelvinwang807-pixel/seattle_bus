@@ -1,0 +1,6 @@
+# Runtime dependencies.
+torch>=2.6
+pandas>=2.2
+tzdata>=2024.1
+# Development/test dependency.
+pytest>=8

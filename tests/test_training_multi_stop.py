@@ -1,3 +1,5 @@
+"""Compatibility tests for legacy recursive future-stop prediction."""
+
 import sys
 
 import pandas as pd
@@ -6,6 +8,7 @@ from unittest.mock import patch
 
 import process
 import training
+from bus_delay import prediction
 
 
 class LastDelayPlusOneModel(torch.nn.Module):
@@ -90,13 +93,13 @@ def route_rows() -> pd.DataFrame:
 def test_predict_future_delay_range_feeds_each_prediction_into_the_next_window():
     with (
         patch.object(
-            training,
+            prediction,
             "load_or_train",
             lambda model_path, data_dir: (LastDelayPlusOneModel(), checkpoint()),
         ),
         patch.object(
-            training,
-            "_representative_route_rows",
+            prediction,
+            "representative_route_rows",
             lambda route_id, stop_sequence, route_to_idx, data_dir, direction_id: route_rows(),
         ),
     ):
@@ -149,13 +152,13 @@ def test_predict_future_delay_range_fills_missing_history_delays_before_predicti
 
     with (
         patch.object(
-            training,
+            prediction,
             "load_or_train",
             lambda model_path, data_dir: (NoNanLastDelayPlusOneModel(), checkpoint()),
         ),
         patch.object(
-            training,
-            "_representative_route_rows",
+            prediction,
+            "representative_route_rows",
             lambda route_id, stop_sequence, route_to_idx, data_dir, direction_id: rows_without_delay,
         ),
     ):
@@ -169,12 +172,31 @@ def test_predict_future_delay_range_fills_missing_history_delays_before_predicti
     assert result == {4: 11.0, 5: 12.0}
 
 def test_to_tensor_keeps_existing_window_target_behavior():
-    df = route_rows()
-    df["delay"] = [0.0, 1.0, 2.0, 3.0, 4.0]
+    first_trip = route_rows()
+    first_trip["delay"] = [0.0, 1.0, 2.0, 3.0, 4.0]
+    second_trip = first_trip.copy()
+    second_trip["trip_id"] = "t2"
+    df = pd.concat([first_trip, second_trip], ignore_index=True)
 
-    x, y = process.to_tensor(df, window=2)
+    x, y, x_test, y_test = process.to_tensor(df, window=2)
 
     delay_index = process.FEATURE_COLUMNS.index("delay")
     assert x.shape == (3, 2, len(process.FEATURE_COLUMNS))
+    assert x_test.shape == (3, 2, len(process.FEATURE_COLUMNS))
     assert y.squeeze(1).tolist() == [2.0, 3.0, 4.0]
+    assert y_test.squeeze(1).tolist() == [2.0, 3.0, 4.0]
     assert x[0, :, delay_index].tolist() == [0.0, 1.0]
+
+
+def test_evaluate_model_reports_mae_and_rmse():
+    x = torch.zeros((2, 2, len(process.FEATURE_COLUMNS)))
+    y = torch.tensor([[1.0], [3.0]])
+
+    class ConstantModel(torch.nn.Module):
+        def forward(self, values):
+            return torch.tensor([[2.0]]).repeat(values.size(0), 1)
+
+    metrics = training.evaluate_model(ConstantModel(), x, y)
+    assert metrics["count"] == 2.0
+    assert metrics["mae_seconds"] == 1.0
+    assert metrics["rmse_seconds"] == 1.0

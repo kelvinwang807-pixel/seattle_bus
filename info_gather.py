@@ -1,3 +1,5 @@
+"""Interactive prompt for the legacy future-stop prediction workflow."""
+
 from pathlib import Path
 
 import training
