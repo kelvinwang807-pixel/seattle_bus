@@ -7,6 +7,11 @@ direction, and next-stop IDs are categorical embeddings; numeric features includ
 current delay, distance, stop sequence, speed, delay change, update age, and cyclic
 time of day.
 
+# Performance
+Due to the lack of data, the current matrics are:
+MAE: 13.18 seconds; RMSE: 95.12 seconds; Smooth L1: 13.02.
+More data is needed for improving the performance
+
 The current snapshot collection is suitable for exercising the pipeline, but it
 is too short to choose a reliable production model. The 146 available snapshots
 cover about 87 minutes across four collection sessions. Continue collecting across
